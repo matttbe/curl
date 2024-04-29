@@ -281,6 +281,7 @@ static CURLcode socket_open(struct Curl_easy *data,
   else {
     /* opensocket callback not set, so simply create the socket now */
     int protocol = addr->protocol;
+    int family = addr->family;
 
     if(data->set.mptcp && protocol == IPPROTO_TCP)
 #if defined(__linux__)
@@ -288,11 +289,16 @@ static CURLcode socket_open(struct Curl_easy *data,
 #  define IPPROTO_MPTCP 262
 #  endif
       protocol = IPPROTO_MPTCP;
+#elif defined(__APPLE__)
+#  ifndef AF_MULTIPATH
+#  define AF_MULTIPATH 39
+#  endif
+      family = AF_MULTIPATH; /* connectx() will need to be used */
 #else
       return CURLE_UNSUPPORTED_PROTOCOL;
 #endif
 
-    *sockfd = socket(addr->family, addr->socktype, protocol);
+    *sockfd = socket(family, addr->socktype, protocol);
   }
 
   if(*sockfd == CURL_SOCKET_BAD)
@@ -1134,6 +1140,12 @@ static int do_connect(struct Curl_cfilter *cf, struct Curl_easy *data,
       rc = 0; /* Do nothing */
 #endif
   }
+#if defined(CONNECT_RESUME_ON_READ_WRITE) /* Darwin */
+  /* connectx() is also needed to use MPTCP */
+  else if(data->set.mptcp) {
+    rc = do_connectx(ctx, CONNECT_RESUME_ON_READ_WRITE);
+  }
+#endif
   else {
     rc = connect(ctx->sock, &ctx->addr.sa_addr, ctx->addr.addrlen);
   }

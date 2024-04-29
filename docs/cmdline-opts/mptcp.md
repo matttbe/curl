@@ -29,9 +29,9 @@ To use MPTCP for your connections, add the `--mptcp` option when using `curl'.
 
 ## Requirements
 
-This feature is currently only supported on Linux starting from kernel 5.6. Only
-TCP connections are modified, hence this option does not effect HTTP/3 (QUIC)
-connections.
+This feature is currently only supported on Linux starting from kernel 5.6, and
+macOS. Only TCP connections are modified, hence this option does not effect
+HTTP/3 (QUIC) connections.
 
 The server you are connecting to must also support MPTCP. If not, the connection
 seamlessly falls back to TCP.

@@ -64,8 +64,9 @@ int main(void)
 
 # AVAILABILITY
 
-Support for MPTCP in libcurl requires Linux 5.6 or later. Only TCP connections
-are modified, hence this option does not effect HTTP/3 (QUIC) connections.
+Support for MPTCP in libcurl requires Linux 5.6 or later, or macOS. Only TCP
+connections are modified, hence this option does not effect HTTP/3 (QUIC)
+connections.
 
 The features availability in libcurl can also depend on the version of libcurl.
 Added in 8.8.0.
