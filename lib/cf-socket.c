@@ -280,7 +280,25 @@ static CURLcode socket_open(struct Curl_easy *data,
   }
   else {
     /* opensocket callback not set, so simply create the socket now */
-    *sockfd = socket(addr->family, addr->socktype, addr->protocol);
+    int protocol = addr->protocol;
+    int family = addr->family;
+
+    if(data->set.mptcp && protocol == IPPROTO_TCP)
+#if defined(__linux__)
+#  ifndef IPPROTO_MPTCP
+#  define IPPROTO_MPTCP 262
+#  endif
+      protocol = IPPROTO_MPTCP;
+#elif defined(__APPLE__)
+#  ifndef AF_MULTIPATH
+#  define AF_MULTIPATH 39
+#  endif
+      family = AF_MULTIPATH; /* connectx() will need to be used */
+#else
+      return CURLE_UNSUPPORTED_PROTOCOL;
+#endif
+
+    *sockfd = socket(family, addr->socktype, protocol);
   }
 
   if(*sockfd == CURL_SOCKET_BAD)
@@ -1065,6 +1083,35 @@ out:
   return result;
 }
 
+#if defined(__APPLE__)
+static int do_connectx(struct cf_socket_ctx *ctx, unsigned int flags)
+{
+#if defined(HAVE_BUILTIN_AVAILABLE)
+  /* while connectx function is available since macOS 10.11 / iOS 9,
+     it did not have the interface declared correctly until
+     Xcode 9 / macOS SDK 10.13 */
+  if(__builtin_available(macOS 10.11, iOS 9.0, tvOS 9.0, watchOS 2.0, *)) {
+    sa_endpoints_t endpoints;
+
+    endpoints.sae_srcif = 0;
+    endpoints.sae_srcaddr = NULL;
+    endpoints.sae_srcaddrlen = 0;
+    endpoints.sae_dstaddr = &ctx->addr.sa_addr;
+    endpoints.sae_dstaddrlen = ctx->addr.addrlen;
+
+    return connectx(ctx->sock, &endpoints, SAE_ASSOCID_ANY, flags, NULL, 0,
+                    NULL, NULL);
+  }
+  else {
+    return connect(ctx->sock, &ctx->addr.sa_addr, ctx->addr.addrlen);
+  }
+#else
+  (void)flags; /* unused parameter */
+  return connect(ctx->sock, &ctx->addr.sa_addr, ctx->addr.addrlen);
+#endif /* HAVE_BUILTIN_AVAILABLE */
+}
+#endif
+
 static int do_connect(struct Curl_cfilter *cf, struct Curl_easy *data,
                       bool is_tcp_fastopen)
 {
@@ -1077,28 +1124,8 @@ static int do_connect(struct Curl_cfilter *cf, struct Curl_easy *data,
   (void)data;
   if(is_tcp_fastopen) {
 #if defined(CONNECT_DATA_IDEMPOTENT) /* Darwin */
-#  if defined(HAVE_BUILTIN_AVAILABLE)
-    /* while connectx function is available since macOS 10.11 / iOS 9,
-       it did not have the interface declared correctly until
-       Xcode 9 / macOS SDK 10.13 */
-    if(__builtin_available(macOS 10.11, iOS 9.0, tvOS 9.0, watchOS 2.0, *)) {
-      sa_endpoints_t endpoints;
-      endpoints.sae_srcif = 0;
-      endpoints.sae_srcaddr = NULL;
-      endpoints.sae_srcaddrlen = 0;
-      endpoints.sae_dstaddr = &ctx->addr.sa_addr;
-      endpoints.sae_dstaddrlen = ctx->addr.addrlen;
-
-      rc = connectx(ctx->sock, &endpoints, SAE_ASSOCID_ANY,
-                    CONNECT_RESUME_ON_READ_WRITE | CONNECT_DATA_IDEMPOTENT,
-                    NULL, 0, NULL, NULL);
-    }
-    else {
-      rc = connect(ctx->sock, &ctx->addr.sa_addr, ctx->addr.addrlen);
-    }
-#  else
-    rc = connect(ctx->sock, &ctx->addr.sa_addr, ctx->addr.addrlen);
-#  endif /* HAVE_BUILTIN_AVAILABLE */
+    rc = do_connectx(ctx,
+                     CONNECT_RESUME_ON_READ_WRITE | CONNECT_DATA_IDEMPOTENT);
 #elif defined(TCP_FASTOPEN_CONNECT) /* Linux >= 4.11 */
     if(setsockopt(ctx->sock, IPPROTO_TCP, TCP_FASTOPEN_CONNECT,
                   (void *)&optval, sizeof(optval)) < 0)
@@ -1113,6 +1140,12 @@ static int do_connect(struct Curl_cfilter *cf, struct Curl_easy *data,
       rc = 0; /* Do nothing */
 #endif
   }
+#if defined(CONNECT_RESUME_ON_READ_WRITE) /* Darwin */
+  /* connectx() is also needed to use MPTCP */
+  else if(data->set.mptcp) {
+    rc = do_connectx(ctx, CONNECT_RESUME_ON_READ_WRITE);
+  }
+#endif
   else {
     rc = connect(ctx->sock, &ctx->addr.sa_addr, ctx->addr.addrlen);
   }
